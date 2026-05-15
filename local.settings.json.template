@@ -1,0 +1,16 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "AzureWebJobsFeatureFlags": "EnableWorkerIndexing",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "STORAGE_ACCOUNT_NAME": "stechoprodech01",
+    "STORAGE_BLOB_ENDPOINT": "https://stechoprodech01.blob.core.windows.net/",
+    "SPEECH_REGION": "westeurope",
+    "SPEECH_ACCOUNT_NAME": "spch-echo-prod",
+    "KEY_VAULT_NAME": "kv-echo-prod-ech01",
+    "STATIC_WEB_APP_URL": "https://mango-desert-0c63a8003.7.azurestaticapps.net",
+    "DEFAULT_COVER_URL": "https://stechoprodech01.blob.core.windows.net/echo-audio/cover-default.jpg",
+    "APPLICATIONINSIGHTS_CONNECTION_STRING": "REPLACE_LOCALLY_FROM_AZURE"
+  }
+}
