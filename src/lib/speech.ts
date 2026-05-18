@@ -1,52 +1,40 @@
 import { DefaultAzureCredential } from '@azure/identity';
 
 const SPEECH_REGION = process.env.SPEECH_REGION ?? 'westeurope';
-// Custom subdomain is required for AAD token auth on Cognitive Services.
-// reason: regional *.api.cognitive.microsoft.com rejects bearer tokens with 400 BadRequest.
-const SPEECH_CUSTOM_DOMAIN = process.env.SPEECH_CUSTOM_DOMAIN ?? 'spch-echo-prod';
+// ARM resource ID for the Speech account. Required as Ocp-Apim-ResourceId
+// when authenticating with an AAD bearer token (disableLocalAuth=true).
+// reason: with local auth disabled, /sts/v1.0/issueToken is blocked; the AAD
+// token must be sent directly to the data plane with the resource id header.
+const SPEECH_RESOURCE_ID = process.env.SPEECH_RESOURCE_ID
+  ?? '/subscriptions/d7505cac-f0a2-4896-8c19-818421939a96/resourceGroups/rg-echo-prod/providers/Microsoft.CognitiveServices/accounts/spch-echo-prod';
 const credential = new DefaultAzureCredential();
 
-let cachedToken: { token: string; expiresAt: number } | undefined;
+let cachedAadToken: { token: string; expiresAt: number } | undefined;
 
-/**
- * Exchange an AAD token for a 10-minute Speech service authorization token.
- * The Function App's managed identity holds Cognitive Services Speech User on
- * spch-echo-prod (granted by infra/modules/rbac.bicep). No keys involved.
- */
-async function getSpeechToken(): Promise<string> {
+async function getAadToken(): Promise<string> {
   const now = Date.now();
-  if (cachedToken && cachedToken.expiresAt > now + 60_000) return cachedToken.token;
-
+  if (cachedAadToken && cachedAadToken.expiresAt > now + 60_000) return cachedAadToken.token;
   const aad = await credential.getToken('https://cognitiveservices.azure.com/.default');
   if (!aad?.token) throw new Error('Failed to acquire AAD token for Cognitive Services');
-
-  const issueUrl = `https://${SPEECH_CUSTOM_DOMAIN}.cognitiveservices.azure.com/sts/v1.0/issueToken`;
-  const res = await fetch(issueUrl, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${aad.token}`, 'Content-Length': '0' }
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Speech token issue failed: ${res.status} ${res.statusText} ${body}`);
-  }
-  const speechToken = await res.text();
-  // Tokens last 10 minutes; refresh at 9 to stay safely in window.
-  cachedToken = { token: speechToken, expiresAt: now + 9 * 60_000 };
-  return speechToken;
+  cachedAadToken = { token: aad.token, expiresAt: aad.expiresOnTimestamp };
+  return aad.token;
 }
 
 /**
  * Synthesize SSML to MP3 using Azure AI Speech REST API with managed identity.
+ * Sends the AAD token directly to the TTS endpoint; no issueToken exchange is
+ * possible because the Speech account has disableLocalAuth=true.
  * Returns the raw MP3 bytes.
  */
 export async function synthesizeSsmlToMp3(ssml: string): Promise<Buffer> {
-  const token = await getSpeechToken();
+  const aadToken = await getAadToken();
   const url = `https://${SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1`;
 
   const response = await fetch(url, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${aadToken}`,
+      'Ocp-Apim-ResourceId': SPEECH_RESOURCE_ID,
       'Content-Type': 'application/ssml+xml',
       'X-Microsoft-OutputFormat': 'audio-48khz-192kbitrate-mono-mp3',
       'User-Agent': 'echo-publisher/0.1'
