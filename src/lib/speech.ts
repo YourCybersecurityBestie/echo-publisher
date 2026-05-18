@@ -1,6 +1,9 @@
 import { DefaultAzureCredential } from '@azure/identity';
 
 const SPEECH_REGION = process.env.SPEECH_REGION ?? 'westeurope';
+// Custom subdomain is required for AAD token auth on Cognitive Services.
+// reason: regional *.api.cognitive.microsoft.com rejects bearer tokens with 400 BadRequest.
+const SPEECH_CUSTOM_DOMAIN = process.env.SPEECH_CUSTOM_DOMAIN ?? 'spch-echo-prod';
 const credential = new DefaultAzureCredential();
 
 let cachedToken: { token: string; expiresAt: number } | undefined;
@@ -17,7 +20,7 @@ async function getSpeechToken(): Promise<string> {
   const aad = await credential.getToken('https://cognitiveservices.azure.com/.default');
   if (!aad?.token) throw new Error('Failed to acquire AAD token for Cognitive Services');
 
-  const issueUrl = `https://${SPEECH_REGION}.api.cognitive.microsoft.com/sts/v1.0/issueToken`;
+  const issueUrl = `https://${SPEECH_CUSTOM_DOMAIN}.cognitiveservices.azure.com/sts/v1.0/issueToken`;
   const res = await fetch(issueUrl, {
     method: 'POST',
     headers: { Authorization: `Bearer ${aad.token}`, 'Content-Length': '0' }
