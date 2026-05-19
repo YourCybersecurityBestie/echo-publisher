@@ -1,30 +1,29 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, writeFile, rm, chmod, stat } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, chmod, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // reason: package has no TypeScript types
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 
-// Flex Consumption Linux strips the executable bit when extracting the deploy
-// package, so the bundled ffprobe binary errors with EACCES on spawn. Restore
-// 0o755 once per cold start.
-let ffprobeReady: Promise<void> | undefined;
-function ensureFfprobeExecutable(): Promise<void> {
-  if (!ffprobeReady) {
-    ffprobeReady = (async () => {
-      try {
-        const s = await stat(ffprobeInstaller.path);
-        // Add owner/group/other execute bits if missing.
-        const desired = s.mode | 0o111;
-        if (desired !== s.mode) await chmod(ffprobeInstaller.path, desired);
-      } catch (err) {
-        ffprobeReady = undefined;
-        throw err;
-      }
-    })();
+// On Flex Consumption Linux, /home/site/wwwroot is read-only and the bundled
+// ffprobe binary lacks the executable bit, so spawning it fails with EACCES
+// and chmod-in-place fails with EPERM. Copy it to /tmp once per cold start
+// and chmod the copy.
+let cachedFfprobePath: Promise<string> | undefined;
+function getExecutableFfprobePath(): Promise<string> {
+  if (!cachedFfprobePath) {
+    cachedFfprobePath = (async () => {
+      const dest = join(tmpdir(), 'echo-ffprobe');
+      await copyFile(ffprobeInstaller.path, dest);
+      await chmod(dest, 0o755);
+      return dest;
+    })().catch((err) => {
+      cachedFfprobePath = undefined;
+      throw err;
+    });
   }
-  return ffprobeReady;
+  return cachedFfprobePath;
 }
 
 interface FfprobeFormat {
@@ -36,13 +35,13 @@ interface FfprobeFormat {
  * music-metadata returns 0 for some HD voice outputs — ffprobe is reliable.
  */
 export async function getMp3DurationSeconds(mp3: Buffer): Promise<number> {
-  await ensureFfprobeExecutable();
+  const ffprobePath = await getExecutableFfprobePath();
   const dir = await mkdtemp(join(tmpdir(), 'echo-'));
   const filePath = join(dir, 'episode.mp3');
   await writeFile(filePath, mp3);
 
   try {
-    const json = await runFfprobe(filePath);
+    const json = await runFfprobe(ffprobePath, filePath);
     const parsed = JSON.parse(json) as FfprobeFormat;
     const duration = parseFloat(parsed.format?.duration ?? '0');
     return Number.isFinite(duration) ? Math.round(duration) : 0;
@@ -51,9 +50,9 @@ export async function getMp3DurationSeconds(mp3: Buffer): Promise<number> {
   }
 }
 
-function runFfprobe(filePath: string): Promise<string> {
+function runFfprobe(ffprobePath: string, filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffprobeInstaller.path, [
+    const proc = spawn(ffprobePath, [
       '-v', 'error',
       '-show_format',
       '-of', 'json',
