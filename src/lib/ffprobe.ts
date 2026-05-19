@@ -1,10 +1,31 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, chmod, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // reason: package has no TypeScript types
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
+
+// Flex Consumption Linux strips the executable bit when extracting the deploy
+// package, so the bundled ffprobe binary errors with EACCES on spawn. Restore
+// 0o755 once per cold start.
+let ffprobeReady: Promise<void> | undefined;
+function ensureFfprobeExecutable(): Promise<void> {
+  if (!ffprobeReady) {
+    ffprobeReady = (async () => {
+      try {
+        const s = await stat(ffprobeInstaller.path);
+        // Add owner/group/other execute bits if missing.
+        const desired = s.mode | 0o111;
+        if (desired !== s.mode) await chmod(ffprobeInstaller.path, desired);
+      } catch (err) {
+        ffprobeReady = undefined;
+        throw err;
+      }
+    })();
+  }
+  return ffprobeReady;
+}
 
 interface FfprobeFormat {
   format?: { duration?: string };
@@ -15,6 +36,7 @@ interface FfprobeFormat {
  * music-metadata returns 0 for some HD voice outputs — ffprobe is reliable.
  */
 export async function getMp3DurationSeconds(mp3: Buffer): Promise<number> {
+  await ensureFfprobeExecutable();
   const dir = await mkdtemp(join(tmpdir(), 'echo-'));
   const filePath = join(dir, 'episode.mp3');
   await writeFile(filePath, mp3);
