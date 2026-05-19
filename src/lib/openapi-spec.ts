@@ -16,14 +16,46 @@ export function buildOpenApi(host: string): object {
       '/synthesize': {
         post: {
           operationId: 'synthesize',
-          summary: 'Synthesize SSML to MP3 and store in user blob.',
+          summary: 'Start an async SSML-to-MP3 synthesis job. Returns 202; poll the Location URL until 200.',
+          'x-ms-long-running-operation': true,
           requestBody: {
             required: true,
             content: { 'application/json': { schema: { $ref: '#/components/schemas/SynthesizeRequest' } } }
           },
           responses: {
-            '200': { description: 'OK', content: { 'application/json': { schema: { $ref: '#/components/schemas/SynthesizeResponse' } } } },
+            '202': {
+              description: 'Accepted. Job queued; poll the Location URL for completion.',
+              headers: {
+                Location: { schema: { type: 'string', format: 'uri' }, description: 'Polling URL.' },
+                'Retry-After': { schema: { type: 'integer' }, description: 'Seconds to wait before polling.' }
+              },
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/SynthesizeAccepted' } } }
+            },
             '400': { description: 'Invalid input' }
+          }
+        }
+      },
+      '/synthesize/status/{jobId}': {
+        get: {
+          operationId: 'synthesizeStatus',
+          summary: 'Poll a synthesis job. Returns 202 while running, 200 when done.',
+          parameters: [
+            { name: 'jobId', in: 'path', required: true, schema: { type: 'string' } }
+          ],
+          responses: {
+            '202': {
+              description: 'Job still running.',
+              headers: {
+                'Retry-After': { schema: { type: 'integer' } }
+              },
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/SynthesizeAccepted' } } }
+            },
+            '200': {
+              description: 'Job complete.',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/SynthesizeResponse' } } }
+            },
+            '404': { description: 'Job not found' },
+            '500': { description: 'Job failed' }
           }
         }
       },
@@ -76,6 +108,14 @@ export function buildOpenApi(host: string): object {
           properties: {
             mp3Url: { type: 'string', format: 'uri' },
             durationSeconds: { type: 'integer' }
+          }
+        },
+        SynthesizeAccepted: {
+          type: 'object',
+          properties: {
+            jobId: { type: 'string' },
+            status: { type: 'string', enum: ['queued', 'running'] },
+            statusUrl: { type: 'string', format: 'uri' }
           }
         },
         EpisodeRequest: {
